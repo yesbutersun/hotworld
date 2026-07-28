@@ -1,0 +1,2 @@
+{"start": 15, "end": 18, "source": "招呼群", "target": "招乎群", "score": 0.9333, "phonetic_similarity": 1.0, "char_similarity": 0.6667, "first_initial_similarity": 1.0, "gram_coverage": 1.0, "decision_source": "mock_llm", "llm_reason": "reference_context_similarity=0.6316"}
+{"start": 19, "end": 24, "source": "云溪大模型", "target": "云犀大模型", "score": 0.96, "phonetic_similarity": 1.0, "char_similarity": 0.8, "first_initial_similarity": 1.0, "gram_coverage": 1.0, "decision_source": "rule", "llm_reason": ""}
