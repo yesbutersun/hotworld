@@ -17,6 +17,7 @@ import argparse
 import difflib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from collections import Counter, defaultdict
@@ -83,6 +84,7 @@ DROP_IN_WINDOW = set(" \t\r\n，。！？、；：,.!?;:\"'“”‘’（）()�
 WHITESPACE_IN_WINDOW = set(" \t\r\n")
 DEFAULT_CHUNK_SEPARATORS = "。！？!?；;\n"
 E_EQUIV_SYLLABLES = {"e", "yi"}
+DEFAULT_CONFUSIONS_PATH = "hotword-confusions.json"
 
 @dataclass(frozen=True)
 class Hotword:
@@ -114,6 +116,13 @@ class Proposal:
 class TextChunk:
     start: int
     end: int
+
+
+@dataclass(frozen=True)
+class ConfusionAlias:
+    source: str
+    target: str
+    pattern: re.Pattern[str]
 
 
 def is_cjk(ch: str) -> bool:
@@ -209,6 +218,42 @@ def read_hotwords(path: Path) -> list[tuple[str, str]]:
         seen.add(term)
         terms.append((term, category))
     return terms
+
+
+def ascii_phrase_pattern(source: str) -> re.Pattern[str]:
+    parts = [re.escape(part) for part in re.split(r"[\s-]+", source.strip()) if part]
+    body = r"[\s-]+".join(parts)
+    return re.compile(rf"(?<![A-Za-z0-9]){body}(?![A-Za-z0-9])", re.IGNORECASE)
+
+
+def literal_alias_pattern(source: str) -> re.Pattern[str]:
+    if source.isascii() and any(ch.isalpha() for ch in source):
+        return ascii_phrase_pattern(source)
+    return re.compile(re.escape(source))
+
+
+def read_confusion_aliases(path: Path, hotword_terms: set[str]) -> list[ConfusionAlias]:
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"{path} must contain a JSON object mapping source aliases to hotwords.")
+
+    aliases = []
+    seen = set()
+    for source, target in raw.items():
+        source = str(source).strip()
+        target = str(target).strip()
+        if not source or not target or source == target:
+            continue
+        if target not in hotword_terms:
+            raise ValueError(f"{path}: alias target is not in hotwords: {source} -> {target}")
+        key = (source, target)
+        if key in seen:
+            continue
+        seen.add(key)
+        aliases.append(ConfusionAlias(source=source, target=target, pattern=literal_alias_pattern(source)))
+    return aliases
 
 
 @lru_cache(maxsize=200_000)
@@ -421,10 +466,44 @@ def inside_longer_exact_hotword(start: int, end: int, protected_spans: list[tupl
     return False
 
 
+def collect_confusion_proposals(
+    text: str,
+    aliases: list[ConfusionAlias],
+    hotword_categories: dict[str, str],
+    protected_spans: list[tuple[int, int]],
+) -> list[Proposal]:
+    proposals = []
+    for alias in aliases:
+        for match in alias.pattern.finditer(text):
+            start, end = match.span()
+            source = text[start:end]
+            if source == alias.target:
+                continue
+            if inside_longer_exact_hotword(start, end, protected_spans):
+                continue
+            proposals.append(
+                Proposal(
+                    start=start,
+                    end=end,
+                    source=source,
+                    target=alias.target,
+                    score=1.0,
+                    phonetic_similarity=1.0,
+                    char_similarity=1.0,
+                    first_initial_similarity=1.0,
+                    gram_coverage=1.0,
+                    decision_source="confusion_alias",
+                    hotword_category=hotword_categories.get(alias.target, "GENERAL"),
+                )
+            )
+    return proposals
+
+
 def collect_proposals(
     text: str,
     hotwords: list[Hotword],
     inverted: dict[str, set[int]],
+    aliases: list[ConfusionAlias],
     min_word_len: int,
     max_word_len: int,
     threshold: float,
@@ -436,6 +515,7 @@ def collect_proposals(
     protected_spans = exact_hotword_spans(text, hotwords)
     hotword_terms = {hotword.term for hotword in hotwords}
     hotword_categories = {hotword.term: hotword.category for hotword in hotwords}
+    proposals.extend(collect_confusion_proposals(text, aliases, hotword_categories, protected_spans))
     scan_chunks = split_text_chunks(
         text,
         chunk_max_len,
@@ -849,6 +929,7 @@ def correct_text(
     text: str,
     hotwords: list[Hotword],
     inverted: dict[str, set[int]],
+    aliases: list[ConfusionAlias],
     min_word_len: int,
     max_word_len: int,
     threshold: float,
@@ -867,6 +948,7 @@ def correct_text(
         text,
         hotwords,
         inverted,
+        aliases,
         min_word_len,
         max_word_len,
         threshold,
@@ -894,6 +976,11 @@ def correct_text(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Demo ASR hotword correction with pinyin inverted index.")
     parser.add_argument("--hotwords", default="hot-world.txt", help="Hotword file, one term per line.")
+    parser.add_argument(
+        "--confusions",
+        default=DEFAULT_CONFUSIONS_PATH,
+        help="Optional JSON object mapping exact ASR confusions to hotwords.",
+    )
     parser.add_argument("--input", default="asr-result-online-tts.txt", help="ASR text file.")
     parser.add_argument("--text", help="ASR text content. When set, this takes precedence over --input.")
     parser.add_argument(
@@ -957,6 +1044,7 @@ def main() -> None:
 
     terms = read_hotwords(Path(args.hotwords))
     hotwords, inverted, min_word_len, max_word_len = build_hotword_index(terms)
+    aliases = read_confusion_aliases(Path(args.confusions), {hotword.term for hotword in hotwords})
     min_word_len = max(1, min_word_len)
     max_word_len = max_word_len + args.max_extra_len
     chunk_max_len = args.chunk_max_len
@@ -970,6 +1058,7 @@ def main() -> None:
         source_text,
         hotwords,
         inverted,
+        aliases,
         min_word_len,
         max_word_len,
         args.threshold,

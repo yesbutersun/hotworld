@@ -38,6 +38,7 @@ ASR text
 
 - `asr_hotword_corrector_demo.py`: 主纠错脚本。
 - `hot-world.txt`: 热词表，一行一个热词。
+- `hotword-confusions.json`: 高置信 ASR 混淆词表，只做精确别名替换。
 - `asr-result-online-tts.txt`: online ASR 结果。
 - `asr-result-offline-tts.txt`: offline ASR 结果。
 - `corrected-*.txt`: 纠错后的文本。
@@ -58,7 +59,7 @@ python3 -m venv .venv
 Online ASR:
 
 ```bash
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --input asr-result-online-tts.txt \
   --output corrected-online.txt \
   --report corrections-online.jsonl
@@ -67,7 +68,7 @@ Online ASR:
 Offline ASR:
 
 ```bash
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --input asr-result-offline-tts.txt \
   --output corrected-offline.txt \
   --report corrections-offline.jsonl
@@ -76,7 +77,7 @@ Offline ASR:
 Direct text:
 
 ```bash
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --text "在客户经营与服务领域，招财号 招呼群、云溪大模型等构建了多元化的客户互动阵地。"
 ```
 
@@ -85,7 +86,7 @@ Direct text:
 切块长度可配置，默认先按 `。！？!?；;` 和换行切块，再把长块切到最多 200 字符：
 
 ```bash
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --input asr-result-online-tts.txt \
   --chunk-max-len 120
 ```
@@ -95,7 +96,7 @@ Direct text:
 Mock LLM rerank:
 
 ```bash
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --input asr-result-online-tts.txt \
   --output corrected-online-mock-llm.txt \
   --report corrections-online-mock-llm.jsonl \
@@ -112,7 +113,7 @@ Real LLM rerank:
 export ASR_LLM_API_KEY="..."
 export ASR_LLM_MODEL="..."
 
-.venv/bin/python asr_hotword_corrector_demo.py \
+.venv/bin/python asr_post_corrector.py \
   --input asr-result-online-tts.txt \
   --output corrected-online-llm.txt \
   --report corrections-online-llm.jsonl \
@@ -129,6 +130,17 @@ export ASR_LLM_MODEL="..."
 ```
 
 不写类别时默认 `GENERAL`。
+
+高置信混淆项可写入 `hotword-confusions.json`：
+
+```json
+{
+  "一识": "e识",
+  "cloud code": "Claude Code"
+}
+```
+
+混淆表只适合放明确错误，不要放正常表达。例如不要把 `一生`、`一世` 或单独的 `cloud` 映射到热词；`cloud code` 只在完整短语边界命中时替换。
 
 ## 技术细节
 
